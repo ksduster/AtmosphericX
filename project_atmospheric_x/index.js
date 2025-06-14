@@ -22,7 +22,12 @@ return new Promise(async (resolve, reject) => {
     loader.modules.hooks.cleanTemp()
     loader.modules.hooks.checkUpdates()
     await loader.modules.webcalling.nextRun()
-    loader.modules.listener.createSession()
+    let inputMode = loader.cache.configurations.sources.primary_sources.noaa_weather_wire_service.input_mode;
+
+        if (inputMode === "nwws") {
+            loader.modules.listener.createSession();
+        }
+
     setInterval(async () => {
         if (new Date().getSeconds() % loader.cache.configurations.project_settings.global_update == 0) {
             if (loader.cache.isRequestingData) { return }

@@ -27,6 +27,8 @@
             "noaa_weather_wire_service": {
                 "enabled": false,
                 "cache_time": 0,
+                "input_mode": "local",
+                "local_alert_folder": "./alerts",
                 "endpoint": "xmpp://nwws-oi.weather.gov",
                 "domain": "nwws-oi.weather.gov",
                 "xml_alerts": false,

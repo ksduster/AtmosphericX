@@ -57,13 +57,31 @@ loader.modules.parsing = new (require(`./modules/parsing.js`))()
 loader.modules.shapefiles = new (require(`./modules/shapefiles.js`))()
 loader.modules.commands = new (require(`./modules/commands.js`))()
 
-loader.modules.listener = new (require(`./modules/nwws-oi/listener.js`))()
 loader.modules.product = new (require(`./modules/nwws-oi/product.js`))()
 loader.modules.vtec = new (require(`./modules/nwws-oi/parsers/vtec.js`))()
 loader.modules.ugc = new (require(`./modules/nwws-oi/parsers/ugc.js`))()
 loader.modules.raw = new (require(`./modules/nwws-oi/parsers/raw.js`))()
 loader.modules.alertbuilder = new (require(`./modules/nwws-oi/event/alert.js`))()
 loader.modules.statementbuilder = new (require(`./modules/nwws-oi/event/special-statement.js`))()
+
+let config = loader.config.sources.primary_sources.noaa_weather_wire_service;
+
+if (config.input_mode === "local") {
+    const FileAlertReader = require('./file_alert_reader.js');
+    const alertFolder = loader.packages.path.resolve(__dirname, config.local_alert_folder || 'alerts');
+
+    const reader = new FileAlertReader(alertFolder, loader); // pass loader for access to modules
+
+    reader.on("message", (data) => {
+        loader.modules.parsing.parse(data.message);
+    });
+
+    console.log(`[AtmosphericX] Input mode: LOCAL FILES`);
+} else {
+    loader.modules.listener = new (require(`./modules/nwws-oi/listener.js`))();
+    console.log(`[AtmosphericX] Input mode: NWWS-OI`);
+}
+
 
 
 loader.definitions.RegExp_VTEC = "[OTEX].(NEW|CON|EXT|EXA|EXB|UPG|CAN|EXP|COR|ROU).[A-Z]{4}.[A-Z]{2}.[WAYSFON].[0-9]{4}.[0-9]{6}T[0-9]{4}Z-[0-9]{6}T[0-9]{4}Z"
