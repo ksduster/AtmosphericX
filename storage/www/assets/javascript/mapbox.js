@@ -82,7 +82,19 @@ class Mapbox {
             getSource.setData({type: `FeatureCollection`,features: GeoJSON});
         }
         if (!this.storage.mapbox.getLayer(targetedLayer)) {
-            this.storage.mapbox.addLayer({id: targetedLayer,type: `line`,source: targetedSource,paint: {'line-color': ['get', 'color'],'line-width': 3}});  
+            const beforeLayerId = 'radar-layer';
+            const layers = this.storage.mapbox.getStyle().layers;
+            const radarLayerExists = layers.some(layer => layer.id === beforeLayerId);
+
+            this.storage.mapbox.addLayer({
+                id: targetedLayer,
+                type: `line`,
+                source: targetedSource,
+                paint: {
+                    'line-color': ['get', 'color'],
+                    'line-width': 3
+                }
+            }, radarLayerExists ? undefined : beforeLayerId); // Add it at the top if radar isn't there
         }
         //this.storage.mapbox.on('click', targetedLayer, (e) => {
         //    let coordinates = e.features[0].geometry.coordinates[0][0].slice();
