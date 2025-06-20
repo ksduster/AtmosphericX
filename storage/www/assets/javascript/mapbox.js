@@ -28,30 +28,29 @@ class Mapbox {
 		this.auto = autoFly;
 		this.alerts = alert_class; // <-- Store it in this.alerts
 		this.name = `MapboxClass`;
-
 		this.manualFlyLock = false;
 		this.manualFlyCooldown = 30000;
 		this.lastRadarUpdate = 0;
 		this.radarUpdateInterval = 5 * 60 * 1000;
-
 		this.library.createOutput(`${this.name} Initialization`, `Successfully initialized ${this.name} module`);
-
 		this.createMapBoxSession();
 
 		document.addEventListener('onCacheUpdate', async (event) => {
-			this.alerts.syncAlerts();
+    this.alerts.syncAlerts();
+    this.displayRadar();
+    this.updateThread();
 
-			// Always update radar if needed
-			this.displayRadar();
+    // This should happen AFTER updateThread refreshes data
+    this.flyToNewlyIssuedAlert();
 
-			// Only update thread (which includes displayAlerts) if cooldown passed
-			if (!this.manualFlyLock) {
-				this.updateThread();
-			}
-		});
+    // Only sync to random alert if we’re not manually flying
+    if (!this.manualFlyLock) {
+        this.syncToRandomAlert();
+    }
+});
+
 
 	}
-
 
     /**
       * @function createMapBoxSession
@@ -227,72 +226,79 @@ class Mapbox {
       * @description Displays alerts on the Mapbox map by creating a polygon source and layer.
       */
 
-	displayAlerts = function () {
-		let alerts = this.storage.active;
-		let alertPlots = [];
-		let scheme = this.storage.configurations.scheme;
-		let hasSetZoom = false;
+displayAlerts = function () {
+    let alerts = this.storage.active;
+    let alertPlots = [];
+    let scheme = this.storage.configurations.scheme;
 
-		alerts.sort((a, b) => new Date(b.details.issued) - new Date(a.details.issued));
+    alerts.sort((a, b) => new Date(b.details.issued) - new Date(a.details.issued));
 
-		for (let i = 0; i < alerts.length; i++) {
-			let alert = alerts[i];
-			let triggerZoom = false;
-			if (!alert.raw.geometry) continue;
-			if (alert.raw.geometry.coordinates.length === 0) continue;
-			if (alert.raw.geometry.coordinates[0].length === 0) continue;
-			if (!hasSetZoom) { hasSetZoom = true; triggerZoom = true; }
+    let now = Date.now();
+    let mostRecentAlert = null;
+    let mostRecentTime = 0;
 
-			let location = alert.details.locations;
-			let sender = alert.details.sender;
-			let eventColor = scheme.find(color => alert.details.name.toLowerCase().includes(color.type.toLowerCase())) || scheme.find(color => color.type === "Default");
-			let coords = alert.raw.geometry.coordinates[0].map(point => [point[0], point[1]]);
-			let name = alert.details.name;
-			let type = alert.details.type;
-			let issued = new Date(alert.details.issued).toLocaleString();
-			let expires = new Date(alert.details.expires).toLocaleString();
-			let tags = alert.details.tag == undefined ? `No tags found` : alert.details.tag;
-			tags = JSON.stringify(tags).replace(/\"/g, ``).replace(/,/g, `, `).replace(/\[/g, ``).replace(/\]/g, ``);
-			let description = `<b>${name} (${type})</b><br>${location}<br><br><b>Sender:</b> ${sender}<br><b>Issued:</b> ${issued}<br><b>Expires:</b> ${expires}<br>Tags: ${tags}`;
+    for (let i = 0; i < alerts.length; i++) {
+        let alert = alerts[i];
+        if (!alert.raw.geometry || !alert.raw.geometry.coordinates?.[0]?.[0]) continue;
 
-			if (triggerZoom && !this.auto && this.storage.realtime.length == 0 && !this.manualFlyLock) {
-				this.manualFlyLock = true;
-				this.storage.mapbox.flyTo({
-					center: [alert.raw.geometry.coordinates[0][0][0], alert.raw.geometry.coordinates[0][0][1]],
-					zoom: 8,
-					speed: 0.4,
-					pitch: 55,
-				});
+        const issuedTimestamp = new Date(alert.details.issued).getTime();
+        if (issuedTimestamp > mostRecentTime) {
+            mostRecentAlert = alert;
+            mostRecentTime = issuedTimestamp;
+        }
 
-				setTimeout(() => {
-					this.manualFlyLock = false;
-				}, this.manualFlyCooldown);
-			}
+        let coords = alert.raw.geometry.coordinates[0].map(point => [point[0], point[1]]);
+        let eventColor = scheme.find(color => alert.details.name.toLowerCase().includes(color.type.toLowerCase())) || scheme.find(color => color.type === "Default");
+        let issued = new Date(alert.details.issued).toLocaleString();
+        let expires = new Date(alert.details.expires).toLocaleString();
+        let tags = alert.details.tag == undefined ? `No tags found` : alert.details.tag;
+        tags = JSON.stringify(tags).replace(/\"/g, ``).replace(/,/g, `, `).replace(/\[/g, ``).replace(/\]/g, ``);
 
-			alertPlots.push({
-				issued: issued,
-				coordinates: coords,
-				color: eventColor.color.light,
-				description: description,
-				autoZoom: triggerZoom
-			});
-		}
+        let description = `<b>${alert.details.name} (${alert.details.type})</b><br>${alert.details.locations}<br><br><b>Sender:</b> ${alert.details.sender}<br><b>Issued:</b> ${issued}<br><b>Expires:</b> ${expires}<br>Tags: ${tags}`;
 
-		if (this.storage.random && this.auto && !this.manualFlyLock && this.storage.realtime.length === 0) {
-			let random = this.storage.random;
-			if (random.raw?.geometry?.coordinates?.[0]?.[0]) {
-				this.storage.mapbox.flyTo({
-					center: [random.raw.geometry.coordinates[0][0][0], random.raw.geometry.coordinates[0][0][1]],
-					zoom: 8,
-					speed: 0.4,
-					pitch: 55,
-				});
-			}
-		}
+        alertPlots.push({
+            issued: issued,
+            coordinates: coords,
+            color: eventColor.color.light,
+            description: description
+        });
+    }
 
+    const isNewAlert = mostRecentAlert && (now - new Date(mostRecentAlert.details.issued).getTime() < this.manualFlyCooldown);
 
-		this.createPolygonSource(alertPlots, `alert-polygons-source`, `alert-polygons-layer`);
-	};
+    // Priority: zoom to new alert first
+    if (isNewAlert && !this.manualFlyLock) {
+        this.manualFlyLock = true;
+        const newCoords = mostRecentAlert.raw.geometry.coordinates[0][0];
+
+        this.storage.mapbox.flyTo({
+            center: newCoords,
+            zoom: 8,
+            speed: 0.4,
+            pitch: 55
+        });
+
+        setTimeout(() => {
+            this.manualFlyLock = false;
+            // Once cooldown ends, return to sync if auto is true
+            if (this.auto) this.syncToRandomAlert();
+        }, this.manualFlyCooldown);
+    }
+
+    // Otherwise, follow random widget
+    if (!isNewAlert && this.auto && !this.manualFlyLock && this.storage.random?.raw?.geometry?.coordinates?.[0]?.[0] && this.storage.realtime.length === 0) {
+        const randomCoords = this.storage.random.raw.geometry.coordinates[0][0];
+        this.storage.mapbox.flyTo({
+            center: randomCoords,
+            zoom: 8,
+            speed: 0.4,
+            pitch: 55
+        });
+    }
+
+    this.createPolygonSource(alertPlots, `alert-polygons-source`, `alert-polygons-layer`);
+};
+
 
 
 
@@ -378,6 +384,38 @@ displayRadar = async function () {
       * @description Updates the Mapbox map by displaying reports, spotters, and alerts.
       * It checks if the map style is loaded before updating.
       */
+
+flyToNewlyIssuedAlert = function () {
+    let alerts = this.storage.active;
+    if (!alerts || alerts.length === 0) return;
+
+    alerts.sort((a, b) => new Date(b.details.issued) - new Date(a.details.issued));
+    const newest = alerts[0];
+    const issuedTimestamp = new Date(newest.details.issued).getTime();
+    const now = Date.now();
+    const isNew = (now - issuedTimestamp) < this.manualFlyCooldown;
+
+    if (
+        isNew &&
+        newest.raw?.geometry?.coordinates?.[0]?.[0] &&
+        !this.manualFlyLock
+    ) {
+        const [lng, lat] = newest.raw.geometry.coordinates[0][0];
+        this.manualFlyLock = true;
+
+        this.storage.mapbox.flyTo({
+            center: [lng, lat],
+            zoom: 8,
+            speed: 0.4,
+            pitch: 55,
+        });
+
+        setTimeout(() => {
+            this.manualFlyLock = false;
+        }, this.manualFlyCooldown);
+    }
+};
+
 
     updateThread = function() {
         if (!this.storage.mapbox.isStyleLoaded()) { setTimeout(() => { this.updateThread() }, 1000); return; }
