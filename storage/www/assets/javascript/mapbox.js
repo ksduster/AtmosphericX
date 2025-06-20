@@ -21,16 +21,37 @@
   * The class also manages map-related UI elements and configurations for rendering radar stations, spotters, and alerts.
   */
 
-class Mapbox { 
-    constructor(library, autoFly) {
-        this.library = library
-        this.storage = this.library.storage
-        this.auto = autoFly
-        this.name = `MapboxClass`
-        this.library.createOutput(`${this.name} Initialization`, `Successfully initialized ${this.name} module`)
-        this.createMapBoxSession()
-        document.addEventListener('onCacheUpdate', (event) => {})
-    }
+class Mapbox {
+	constructor(library, autoFly, alert_class) {
+		this.library = library;
+		this.storage = this.library.storage;
+		this.auto = autoFly;
+		this.alerts = alert_class; // <-- Store it in this.alerts
+		this.name = `MapboxClass`;
+
+		this.manualFlyLock = false;
+		this.manualFlyCooldown = 30000;
+		this.lastRadarUpdate = 0;
+		this.radarUpdateInterval = 5 * 60 * 1000;
+
+		this.library.createOutput(`${this.name} Initialization`, `Successfully initialized ${this.name} module`);
+
+		this.createMapBoxSession();
+
+		document.addEventListener('onCacheUpdate', async (event) => {
+			this.alerts.syncAlerts();
+
+			// Always update radar if needed
+			this.displayRadar();
+
+			// Only update thread (which includes displayAlerts) if cooldown passed
+			if (!this.manualFlyLock) {
+				this.updateThread();
+			}
+		});
+
+	}
+
 
     /**
       * @function createMapBoxSession
@@ -82,19 +103,7 @@ class Mapbox {
             getSource.setData({type: `FeatureCollection`,features: GeoJSON});
         }
         if (!this.storage.mapbox.getLayer(targetedLayer)) {
-            const beforeLayerId = 'radar-layer';
-            const layers = this.storage.mapbox.getStyle().layers;
-            const radarLayerExists = layers.some(layer => layer.id === beforeLayerId);
-
-            this.storage.mapbox.addLayer({
-                id: targetedLayer,
-                type: `line`,
-                source: targetedSource,
-                paint: {
-                    'line-color': ['get', 'color'],
-                    'line-width': 3
-                }
-            }, radarLayerExists ? undefined : beforeLayerId); // Add it at the top if radar isn't there
+            this.storage.mapbox.addLayer({id: targetedLayer,type: `line`,source: targetedSource,paint: {'line-color': ['get', 'color'],'line-width': 3}});  
         }
         //this.storage.mapbox.on('click', targetedLayer, (e) => {
         //    let coordinates = e.features[0].geometry.coordinates[0][0].slice();
@@ -218,59 +227,73 @@ class Mapbox {
       * @description Displays alerts on the Mapbox map by creating a polygon source and layer.
       */
 
-    displayAlerts = function() {
-        let alerts = this.storage.active
-        let alertPlots = []
-        let scheme = this.storage.configurations.scheme
-        let hasSetZoom = false
-        alerts.sort((a, b) => new Date(b.details.issued) - new Date(a.details.issued))
-        for (let i = 0; i < alerts.length; i++) {
-            let alert = alerts[i]
-            let triggerZoom = false
-            if (!alert.raw.geometry) { continue; }
-            if (alert.raw.geometry.coordinates.length == 0 ) { continue; }
-            if (alert.raw.geometry.coordinates[0].length == 0) { continue; }
-            if (hasSetZoom == false) { hasSetZoom = true; triggerZoom = true;  }
-            let location = alert.details.locations;
-            let sender = alert.details.sender;
-            let eventColor = scheme.find(color => alert.details.name.toLowerCase().includes(color.type.toLowerCase())) || scheme.find(color => color.type === "Default");
-            let coords = alert.raw.geometry.coordinates[0].map(point => [point[0], point[1]]);
-            let name = alert.details.name;
-            let type = alert.details.type;
-            let issued = new Date(alert.details.issued).toLocaleString();
-            let expires = new Date(alert.details.expires).toLocaleString();
-            let tags = alert.details.tag == undefined ? `No tags found` : alert.details.tag
-            tags = JSON.stringify(tags).replace(/\"/g, ``).replace(/,/g, `, `).replace(/\[/g, ``).replace(/\]/g, ``)
-            let description = `<b>${name} (${type})</b><br>${location}<br><br><b>Sender:</b> ${sender}<br><b>Issued:</b> ${issued}<br><b>Expires:</b> ${expires}<br>Tags: ${tags}`;
-            if (triggerZoom && !this.auto && this.storage.realtime.length == 0) {
-                this.storage.mapbox.flyTo({center: [alert.raw.geometry.coordinates[0][0][0], alert.raw.geometry.coordinates[0][0][1]], zoom: 9, speed: 0.4, pitch: 55, });
-                if (description === ``) {description = `No description provided`}
-                //if (this.currentPopup) {this.currentPopup.remove();}
-                //this.currentPopup = new mapboxgl.Popup({ className: 'widgets-custom-popup' }).setLngLat([alert.raw.geometry.coordinates[0][0][0], alert.raw.geometry.coordinates[0][0][1]]).setHTML(`<div>${description}</div>`).addTo(this.storage.mapbox);
-            }
-            alertPlots.push({
-                issued: issued,
-                coordinates: coords,
-                color: eventColor.color.light,
-                description: description,
-                autoZoom: triggerZoom
-            })
-        }
-        if (alertPlots.length > 0 && this.storage.realtime.length == 0 && this.auto) {
-            let validAlertFound = false;
-            while (!validAlertFound && alertPlots.length > 0) {
-                let randomAlert = alertPlots[Math.floor(Math.random() * alertPlots.length)];
-                if (randomAlert.coordinates && randomAlert.coordinates.length > 0 && randomAlert.coordinates[0] && randomAlert.coordinates[0].length > 0) {
-                    validAlertFound = true;
-                    this.storage.mapbox.flyTo({center: [randomAlert.coordinates[0][0], randomAlert.coordinates[0][1]], zoom: 9, speed: 0.4, pitch: 55, });
-                } else {
-                    alertPlots.splice(alertPlots.indexOf(randomAlert), 1); // Remove invalid alert
-                }
-            }
-        }  
+	displayAlerts = function () {
+		let alerts = this.storage.active;
+		let alertPlots = [];
+		let scheme = this.storage.configurations.scheme;
+		let hasSetZoom = false;
 
-        this.createPolygonSource(alertPlots, `alert-polygons-source`, `alert-polygons-layer`)
-    }
+		alerts.sort((a, b) => new Date(b.details.issued) - new Date(a.details.issued));
+
+		for (let i = 0; i < alerts.length; i++) {
+			let alert = alerts[i];
+			let triggerZoom = false;
+			if (!alert.raw.geometry) continue;
+			if (alert.raw.geometry.coordinates.length === 0) continue;
+			if (alert.raw.geometry.coordinates[0].length === 0) continue;
+			if (!hasSetZoom) { hasSetZoom = true; triggerZoom = true; }
+
+			let location = alert.details.locations;
+			let sender = alert.details.sender;
+			let eventColor = scheme.find(color => alert.details.name.toLowerCase().includes(color.type.toLowerCase())) || scheme.find(color => color.type === "Default");
+			let coords = alert.raw.geometry.coordinates[0].map(point => [point[0], point[1]]);
+			let name = alert.details.name;
+			let type = alert.details.type;
+			let issued = new Date(alert.details.issued).toLocaleString();
+			let expires = new Date(alert.details.expires).toLocaleString();
+			let tags = alert.details.tag == undefined ? `No tags found` : alert.details.tag;
+			tags = JSON.stringify(tags).replace(/\"/g, ``).replace(/,/g, `, `).replace(/\[/g, ``).replace(/\]/g, ``);
+			let description = `<b>${name} (${type})</b><br>${location}<br><br><b>Sender:</b> ${sender}<br><b>Issued:</b> ${issued}<br><b>Expires:</b> ${expires}<br>Tags: ${tags}`;
+
+			if (triggerZoom && !this.auto && this.storage.realtime.length == 0 && !this.manualFlyLock) {
+				this.manualFlyLock = true;
+				this.storage.mapbox.flyTo({
+					center: [alert.raw.geometry.coordinates[0][0][0], alert.raw.geometry.coordinates[0][0][1]],
+					zoom: 8,
+					speed: 0.4,
+					pitch: 55,
+				});
+
+				setTimeout(() => {
+					this.manualFlyLock = false;
+				}, this.manualFlyCooldown);
+			}
+
+			alertPlots.push({
+				issued: issued,
+				coordinates: coords,
+				color: eventColor.color.light,
+				description: description,
+				autoZoom: triggerZoom
+			});
+		}
+
+		if (this.storage.random && this.auto && !this.manualFlyLock && this.storage.realtime.length === 0) {
+			let random = this.storage.random;
+			if (random.raw?.geometry?.coordinates?.[0]?.[0]) {
+				this.storage.mapbox.flyTo({
+					center: [random.raw.geometry.coordinates[0][0][0], random.raw.geometry.coordinates[0][0][1]],
+					zoom: 8,
+					speed: 0.4,
+					pitch: 55,
+				});
+			}
+		}
+
+
+		this.createPolygonSource(alertPlots, `alert-polygons-source`, `alert-polygons-layer`);
+	};
+
 
 
     /**
@@ -292,30 +315,64 @@ class Mapbox {
     }
 
 
-    displayRadar = async function () {
-        try {
-            const response = await this.library.createHttpRequest('https://api.rainviewer.com/public/weather-maps.json');
-            const data = await response.json();
-            const latestRadar = data.radar.past.at(-1);
-            if (!latestRadar || !latestRadar.time) return;
-            if (!this.storage.mapbox.getSource('radar-source')) {
-                this.storage.mapbox.addSource('radar-source', {
-                    type: 'raster',
-                    tiles: [`https://tilecache.rainviewer.com/v2/radar/${latestRadar.time}/512/{z}/{x}/{y}/6/0_0.png`],
-                    tileSize: 256
-                });
-            }
-            if (!this.storage.mapbox.getLayer('radar-layer')) {
-                this.storage.mapbox.addLayer({
-                    id: 'radar-layer',
-                    type: 'raster',
-                    source: 'radar-source',
-                    paint: { 'raster-opacity': 0.5 }
-                });
-            }
-        } catch (err) {}
+displayRadar = async function () {
+    const now = Date.now();
+    if (!this.lastRadarUpdate) this.lastRadarUpdate = 0;
+    if (!this.radarUpdateInterval) this.radarUpdateInterval = 5 * 60 * 1000; // 5 minutes
+
+    if (now - this.lastRadarUpdate < this.radarUpdateInterval) {
+        return; // Skip update if cooldown hasn't expired
     }
 
+    this.lastRadarUpdate = now;
+
+    try {
+        const response = await this.library.createHttpRequest('https://api.rainviewer.com/public/weather-maps.json');
+        const data = await response.json();
+        const latestRadar = data.radar.past.at(-1);
+        if (!latestRadar || !latestRadar.time) return;
+
+        const radarUrl = `https://tilecache.rainviewer.com/v2/radar/${latestRadar.time}/512/{z}/{x}/{y}/6/0_0.png`;
+
+        if (!this.storage.mapbox.getSource('radar-source')) {
+            this.storage.mapbox.addSource('radar-source', {
+                type: 'raster',
+                tiles: [radarUrl],
+                tileSize: 256
+            });
+        } else {
+            this.storage.mapbox.getSource('radar-source').setTiles([radarUrl]);
+        }
+
+        if (!this.storage.mapbox.getLayer('radar-layer')) {
+            this.storage.mapbox.addLayer({
+                id: 'radar-layer',
+                type: 'raster',
+                source: 'radar-source',
+                paint: { 'raster-opacity': 0.5 }
+            });
+        }
+
+    } catch (err) {
+        console.error('Radar fetch failed:', err);
+    }
+}
+
+
+	syncToRandomAlert = function () {
+		if (!this.auto) return;
+		if (!this.storage.random || !this.storage.random.raw || !this.storage.random.raw.geometry) return;
+
+		const coords = this.storage.random.raw.geometry.coordinates?.[0]?.[0];
+		if (!coords || coords.length !== 2) return;
+
+		this.storage.mapbox.flyTo({
+			center: coords,
+			zoom: 8,
+			speed: 0.5,
+			pitch: 55
+		});
+}
     /**
       * @function updateThread
       * @description Updates the Mapbox map by displaying reports, spotters, and alerts.

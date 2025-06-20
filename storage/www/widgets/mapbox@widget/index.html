@@ -15,17 +15,26 @@
     <body>
         <div id="mapbox-container" class="mapbox-container"></div>
     </body>
-    <script>
-        let parameter = window.location.href.split('?')[1] || false
-        let library = new Library()
-        library.createWebsocketSession([`realtime`, `public`, `active`, `manual`, `spotters`, `reports`]).then(() => {
-            let alert_class = new Alerts(library)
-            let mapbox_class = new Mapbox(library, parameter == `true` ? true : false)
-            mapbox_class.updateThread()
-            document.addEventListener('onCacheUpdate', async (event) => {
-                alert_class.syncAlerts()
-                mapbox_class.updateThread()
-            })
-        })
-    </script>
+	<script>
+		let parameter = window.location.href.split('?')[1] || false;
+		let library = new Library();
+	
+		library.createWebsocketSession([`realtime`, `public`, `active`, `manual`, `spotters`, `reports`, `random`]).then(() => {
+			let alert_class = new Alerts(library);
+			let mapbox_class = new Mapbox(library, parameter === `true`, alert_class);
+
+			// Handle all updates inside onCacheUpdate
+			document.addEventListener('onCacheUpdate', async (event) => {
+				alert_class.syncAlerts();
+				mapbox_class.updateThread();
+
+				// Only sync to random if auto mode is enabled
+				if (parameter === `true`) {
+					mapbox_class.syncToRandomAlert();
+				}
+			});
+		});
+	</script>
+
+
 </html>
