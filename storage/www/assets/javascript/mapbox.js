@@ -22,35 +22,54 @@
   */
 
 class Mapbox {
-	constructor(library, autoFly, alert_class) {
-		this.library = library;
-		this.storage = this.library.storage;
-		this.auto = autoFly;
-		this.alerts = alert_class; // <-- Store it in this.alerts
-		this.name = `MapboxClass`;
-		this.manualFlyLock = false;
-		this.manualFlyCooldown = 30000;
-		this.lastRadarUpdate = 0;
-		this.radarUpdateInterval = 5 * 60 * 1000;
-		this.library.createOutput(`${this.name} Initialization`, `Successfully initialized ${this.name} module`);
-		this.createMapBoxSession();
+    constructor(library, autoFly, alert_class) {
+	this.library = library;
+	this.storage = this.library.storage;
+	this.auto = autoFly;
+	this.alerts = alert_class;
+	this.name = `MapboxClass`;
 
-		document.addEventListener('onCacheUpdate', async (event) => {
-    this.alerts.syncAlerts();
-    this.displayRadar();
-    this.updateThread();
+	this.manualFlyLock = false;
+	this.manualFlyCooldown = 30000; // Set default value first
+	this.lastRadarUpdate = 0;
+	this.radarUpdateInterval = 5 * 60 * 1000;
 
-    // This should happen AFTER updateThread refreshes data
-    this.flyToNewlyIssuedAlert();
+	this.library.createOutput(`${this.name} Initialization`, `Successfully initialized ${this.name} module`);
+	this.createMapBoxSession();
 
-    // Only sync to random alert if we’re not manually flying
-    if (!this.manualFlyLock) {
-        this.syncToRandomAlert();
-    }
-});
+	// ✅ Delay cooldown setup until storage is ready
+	setTimeout(() => {
+		try {
+			const duration = this.storage?.configurations?.widget_settings?.alert?.duration;
+			if (typeof duration === 'number' && duration > 0) {
+				this.manualFlyCooldown = (duration - 0.8) * 1000;
+				this.library.createOutput(this.name, `manualFlyCooldown set to ${this.manualFlyCooldown}ms from config`);
+			} else {
+				this.library.createOutput(this.name, `Alert duration not found — using default manualFlyCooldown of 30000ms`);
+			}
+		} catch (err) {
+			console.error(`[${this.name}] Error setting manualFlyCooldown:`, err);
+		}
+	}, 800); // Delay allows time for configurations to be loaded
 
+    document.addEventListener('onCacheUpdate', async () => {
+        this.alerts.syncAlerts();
+        this.displayRadar();
 
-	}
+        // Priority: zoom to new alerts
+        if (!this.manualFlyLock) {
+            this.flyToNewlyIssuedAlert();
+        }
+
+        // Fallback: if auto is on and no new alerts
+        if (this.auto && !this.manualFlyLock) {
+            this.syncToRandomAlert();
+        }
+
+        this.updateThread();
+    });
+
+}
 
     /**
       * @function createMapBoxSession
@@ -264,9 +283,22 @@ displayAlerts = function () {
         });
     }
 
+    // 🔽 ADD THIS BLOCK HERE
+    if (alertPlots.length === 0) {
+        const defaultSettings = this.storage.configurations.widget_settings.mapbox.settings;
+
+        this.storage.mapbox.flyTo({
+            center: defaultSettings.center,
+            zoom: defaultSettings.zoom,
+            speed: 0.6,
+            pitch: 55
+        });
+
+        return; // Exit early — nothing to draw
+    }
+
     const isNewAlert = mostRecentAlert && (now - new Date(mostRecentAlert.details.issued).getTime() < this.manualFlyCooldown);
 
-    // Priority: zoom to new alert first
     if (isNewAlert && !this.manualFlyLock) {
         this.manualFlyLock = true;
         const newCoords = mostRecentAlert.raw.geometry.coordinates[0][0];
@@ -274,33 +306,28 @@ displayAlerts = function () {
         this.storage.mapbox.flyTo({
             center: newCoords,
             zoom: 8,
-            speed: 0.4,
+            speed: 1.4,
             pitch: 55
         });
 
         setTimeout(() => {
             this.manualFlyLock = false;
-            // Once cooldown ends, return to sync if auto is true
             if (this.auto) this.syncToRandomAlert();
         }, this.manualFlyCooldown);
     }
 
-    // Otherwise, follow random widget
     if (!isNewAlert && this.auto && !this.manualFlyLock && this.storage.random?.raw?.geometry?.coordinates?.[0]?.[0] && this.storage.realtime.length === 0) {
         const randomCoords = this.storage.random.raw.geometry.coordinates[0][0];
         this.storage.mapbox.flyTo({
             center: randomCoords,
             zoom: 8,
-            speed: 0.4,
+            speed: 1.4,
             pitch: 55
         });
     }
 
     this.createPolygonSource(alertPlots, `alert-polygons-source`, `alert-polygons-layer`);
 };
-
-
-
 
     /**
       * @function realTimeIRL
@@ -356,7 +383,7 @@ displayRadar = async function () {
                 type: 'raster',
                 source: 'radar-source',
                 paint: { 'raster-opacity': 0.5 }
-            });
+            }, 'settlement-subdivision-label');
         }
 
     } catch (err) {
@@ -375,15 +402,10 @@ displayRadar = async function () {
 		this.storage.mapbox.flyTo({
 			center: coords,
 			zoom: 8,
-			speed: 0.5,
+			speed: 1.5,
 			pitch: 55
 		});
 }
-    /**
-      * @function updateThread
-      * @description Updates the Mapbox map by displaying reports, spotters, and alerts.
-      * It checks if the map style is loaded before updating.
-      */
 
 flyToNewlyIssuedAlert = function () {
     let alerts = this.storage.active;
@@ -406,7 +428,7 @@ flyToNewlyIssuedAlert = function () {
         this.storage.mapbox.flyTo({
             center: [lng, lat],
             zoom: 8,
-            speed: 0.4,
+            speed: 1.4,
             pitch: 55,
         });
 
