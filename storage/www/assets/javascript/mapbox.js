@@ -218,6 +218,37 @@ class Mapbox {
       * @function displaySpotters
       * @description Displays spotters on the Mapbox map by creating a dot source and layer.
       */
+loadSpotterReports = async function () {
+    try {
+        const endpoint = this.storage.configurations.widget_settings.spotter_network_reports.endpoint;
+        const response = await fetch(endpoint);
+        const text = await response.text();
+
+        const lines = text.trim().split('\n');
+        const parsedReports = [];
+
+        for (let line of lines) {
+            const [latitude, longitude, timestamp, event, description, sender] = line.split('|');
+            if (!latitude || !longitude) continue;
+
+            parsedReports.push({
+                latitude: parseFloat(latitude),
+                longitude: parseFloat(longitude),
+                timestamp,
+                event,
+                description,
+                sender,
+            });
+        }
+
+        this.storage.reports = parsedReports;
+        console.log(`[SpotterReports] Loaded ${parsedReports.length} reports`);
+
+    } catch (error) {
+        console.error('[SpotterReports] Failed to fetch reports:', error);
+        this.storage.reports = [];
+    }
+}
 
     displaySpotters = function() {
         let spotters = this.storage.spotters
