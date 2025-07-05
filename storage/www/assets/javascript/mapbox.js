@@ -388,7 +388,6 @@ displayAlerts = function () {
         }
     }
 
-
 displayRadar = async function () {
     const now = Date.now();
     if (!this.lastRadarUpdate) this.lastRadarUpdate = 0;
@@ -396,6 +395,35 @@ displayRadar = async function () {
 
     if (now - this.lastRadarUpdate < this.radarUpdateInterval) {
         return; // Skip update if cooldown hasn't expired
+    
+      displayRadar = async function () {
+        try {
+            let response = await this.library.createHttpRequest('https://api.rainviewer.com/public/weather-maps.json');
+            let data = await response.json();
+            let latestRadar = data.radar.past.at(-1);
+            if (!latestRadar || !latestRadar.time) return;
+            let radarSourceId = 'radar-source';
+            let radarLayerId = 'radar-layer';
+            let radarTiles = [`https://tilecache.rainviewer.com/v2/radar/${latestRadar.time}/512/{z}/{x}/{y}/6/0_0.png`];
+            if (this.storage.mapbox.getSource(radarSourceId)) {
+                this.storage.mapbox.getSource(radarSourceId).setTiles(radarTiles);
+            } else {
+                this.storage.mapbox.addSource(radarSourceId, {
+                    type: 'raster',
+                    tiles: radarTiles,
+                    tileSize: 256
+                });
+            }
+            if (!this.storage.mapbox.getLayer(radarLayerId)) {
+                this.storage.mapbox.addLayer({
+                    id: radarLayerId,
+                    type: 'raster',
+                    source: radarSourceId,
+                    paint: { 'raster-opacity': 0.5 }
+                });
+            }
+        } catch (err) {}
+
     }
 
     this.lastRadarUpdate = now;
