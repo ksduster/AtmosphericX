@@ -315,18 +315,28 @@ displayAlerts = function () {
     }
 
     // 🔽 ADD THIS BLOCK HERE
-    if (alertPlots.length === 0) {
-        const defaultSettings = this.storage.configurations.widget_settings.mapbox.settings;
+		if (alertPlots.length === 0) {
+		// Remove existing polygon layer if it exists
+		if (this.storage.mapbox.getLayer('alert-polygons-layer')) {
+			this.storage.mapbox.removeLayer('alert-polygons-layer');
+		}
+		// Remove existing polygon source if it exists
+		if (this.storage.mapbox.getSource('alert-polygons-source')) {
+			this.storage.mapbox.removeSource('alert-polygons-source');
+		}
 
-        this.storage.mapbox.flyTo({
-            center: defaultSettings.center,
-            zoom: defaultSettings.zoom,
-            speed: 0.6,
-            pitch: 55
-        });
+		// Zoom back to default location
+		const defaultSettings = this.storage.configurations.widget_settings.mapbox.settings;
+		this.storage.mapbox.flyTo({
+			center: defaultSettings.center,
+			zoom: defaultSettings.zoom,
+			speed: 0.6,
+			pitch: 55
+		});
 
-        return; // Exit early — nothing to draw
-    }
+		return;
+	}
+
 
     const isNewAlert = mostRecentAlert && (now - new Date(mostRecentAlert.details.issued).getTime() < this.manualFlyCooldown);
 
